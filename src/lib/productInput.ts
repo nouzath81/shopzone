@@ -22,7 +22,6 @@ export async function parseProduct(b: any): Promise<{ error: string } | { data: 
   const description = String(b?.description ?? "").trim();
   const price = toCents(b?.price);
   const original = b?.originalPrice === "" || b?.originalPrice == null ? null : toCents(b.originalPrice);
-  const stock = variants.length > 0 ? variants.reduce((n, v) => n + v.stock, 0) : Math.floor(Number(b?.stock));
   const images: string[] = Array.isArray(b?.images) ? b.images.map((x: unknown) => String(x).trim()).filter(Boolean) : [];
   const categoryId = String(b?.categoryId ?? "");
   const weightGrams = b?.weightGrams === "" || b?.weightGrams == null ? 0 : Math.floor(Number(b.weightGrams));
@@ -41,6 +40,9 @@ export async function parseProduct(b: any): Promise<{ error: string } | { data: 
     seen.add(name.toLowerCase());
     variants.push({ id: typeof v?.id === "string" && v.id ? v.id : undefined, name, stock: vs });
   }
+
+  // Must come after the variants loop above, because it reads `variants`.
+  const stock = variants.length > 0 ? variants.reduce((n, v) => n + v.stock, 0) : Math.floor(Number(b?.stock));
 
   if (title.length < 3 || title.length > 150) return { error: "Title must be 3–150 characters" };
   if (description.length < 10) return { error: "Please write a longer description" };
