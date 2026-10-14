@@ -1,0 +1,302 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+  seller       Seller?
+  orders       Order[]
+  reviews      Review[]
+  wishlist     WishlistItem[]
+  resets       PasswordReset[]
+  verifications EmailVerification[]
+  addresses    Address[]
+  questions    Question[]
+  returns      ReturnRequest[]
+  sessionVersion Int      @default(0) // raised to sign the user out of every device
+  emailVerified  DateTime? // set when the user opens the link we emailed
+}
+
+enum Role {
+  CUSTOMER
+  SELLER
+  ADMIN
+}
+
+model Seller {
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id])
+  shopName  String
+  slug      String    @unique
+  rating    Float     @default(4.5)
+  approved  Boolean   @default(false) // admin must approve before products show in the shop
+  about     String    @default("")
+  shippingFee      Int  @default(0) // flat fee per order, in cents (0 = free shipping)
+  shippingPerKg    Int  @default(0) // extra fee for each kg after the first kg of one seller's parcel, in cents
+  freeShippingOver Int? // goods total from this seller at which shipping becomes free, in cents
+  shippingZones    Json @default("[]") // [{ city, fee }] fee per delivery city, in cents; other cities use shippingFee
+  commissionPct    Int  @default(10) // marketplace commission taken from this seller's delivered sales
+  products  Product[]
+  payouts   Payout[]
+  createdAt DateTime  @default(now())
+}
+
+model Category {
+  id       String    @id @default(cuid())
+  name     String
+  slug     String    @unique
+  icon     String    @default("🛍️")
+  products Product[]
+}
+
+model Product {
+  id            String      @id @default(cuid())
+  title         String
+  description   String
+  price         Int // in cents / smallest currency unit
+  originalPrice Int?
+  stock         Int         @default(0)
+  rating        Float       @default(0)
+  ratingCount   Int         @default(0)
+  sold          Int         @default(0)
+  flashSale     Boolean     @default(false)
+  active        Boolean     @default(true)
+  images        String[]
+  categoryId    String
+  category      Category    @relation(fields: [categoryId], references: [id])
+  sellerId      String
+  seller        Seller      @relation(fields: [sellerId], references: [id])
+  createdAt     DateTime    @default(now())
+  orderItems    OrderItem[]
+  reviews       Review[]
+  wishlisted    WishlistItem[]
+  questions     Question[]
+  variants      ProductVariant[]
+  weightGrams   Int         @default(0) // 0 = not set (adds nothing to the weight-based shipping fee)
+
+  @@index([categoryId])
+  @@index([sellerId])
+  @@index([title])
+}
+
+model Order {
+  id        String      @id @default(cuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id])
+  name      String
+  phone     String
+  address   String
+  city      String
+  payment   String      @default("COD")
+  discount  Int         @default(0)
+  voucherCode String?
+  voucherReleased Boolean @default(false) // true once a cancelled order has given its voucher use back
+  shipping  Int         @default(0)
+  total     Int // goods - discount + shipping
+  paid        Boolean     @default(false) // set by the PayHere callback for card orders
+  paidAt      DateTime?
+  paymentRef  String? // PayHere payment_id
+  createdAt DateTime    @default(now())
+  items     OrderItem[]
+
+  @@index([userId])
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+// Status lives on each item, because in a marketplace every seller ships their own part of an order.
+model OrderItem {
+  id        String      @id @default(cuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product     @relation(fields: [productId], references: [id])
+  quantity  Int
+  price     Int
+  status    OrderStatus @default(PENDING)
+  review    Review?
+  returnRequest ReturnRequest?
+  variantId     String? // which size / colour was bought (null when the product has no variants)
+  variant       ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  variantName   String? // copy of the name at the time of the order, kept even if the seller later removes the variant
+  commissionPct Int @default(10) // marketplace commission at the time of the order
+  trackingNo  String? // courier + tracking number, entered by the seller when shipping
+  shippedAt   DateTime?
+  deliveredAt DateTime?
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model Review {
+  id          String    @id @default(cuid())
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  orderItemId String    @unique // one review per purchased item
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id])
+  rating      Int
+  comment     String
+  createdAt   DateTime  @default(now())
+
+  @@index([productId])
+}
+
+model Voucher {
+  id         String    @id @default(cuid())
+  code       String    @unique
+  percentOff Int? // e.g. 10 = 10% off
+  amountOff  Int? // fixed amount in cents
+  minSpend   Int       @default(0) // cents
+  maxUses    Int?
+  used       Int       @default(0)
+  expiresAt  DateTime?
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+}
+
+// Used to slow down password guessing and mass sign-ups.
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  key       String
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
+}
+
+model WishlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId])
+}
+
+// One row per "forgot password" request. Only a hash of the token is stored, never the token itself.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// One row per "verify your email" mail. Only a hash of the token is stored.
+model EmailVerification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  REFUNDED
+}
+
+// A customer asks to return a delivered item. Seller (or admin) decides; admin marks it refunded once the money is back.
+model ReturnRequest {
+  id           String       @id @default(cuid())
+  orderItemId  String       @unique
+  orderItem    OrderItem    @relation(fields: [orderItemId], references: [id])
+  userId       String
+  user         User         @relation(fields: [userId], references: [id])
+  reason       String
+  status       ReturnStatus @default(REQUESTED)
+  refundAmount Int          @default(0) // cents, the item's price minus its share of any voucher; shipping is not refunded
+  note         String? // reply from the seller / admin
+  createdAt    DateTime     @default(now())
+  decidedAt    DateTime?
+  refundedAt   DateTime?
+
+  @@index([userId])
+  @@index([status])
+}
+
+// Money the marketplace has paid out to a seller.
+model Payout {
+  id        String   @id @default(cuid())
+  sellerId  String
+  seller    Seller   @relation(fields: [sellerId], references: [id])
+  amount    Int // cents
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([sellerId])
+}
+
+// Saved delivery addresses (max 10 per user, one can be the default).
+model Address {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  phone     String
+  address   String
+  city      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// A shopper's question about a product, answered by the seller. Only answered questions are public.
+model Question {
+  id         String    @id @default(cuid())
+  productId  String
+  product    Product   @relation(fields: [productId], references: [id])
+  userId     String
+  user       User      @relation(fields: [userId], references: [id])
+  text       String
+  answer     String?
+  answeredAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([productId])
+}
+
+// A size / colour / etc. of a product with its own stock. When a product has variants,
+// Product.stock is the sum of the variant stocks, so lists and "sold out" checks keep working.
+model ProductVariant {
+  id         String      @id @default(cuid())
+  productId  String
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name       String
+  stock      Int         @default(0)
+  sortOrder  Int         @default(0)
+  orderItems OrderItem[]
+
+  @@index([productId])
+}
